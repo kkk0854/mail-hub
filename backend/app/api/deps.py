@@ -12,16 +12,6 @@ from ..core.db import get_db
 from ..models import ApiKey, User
 
 
-async def get_optional_user(
-    token: str | None = Query(default=None),
-    session: AsyncSession = Depends(get_db),
-) -> User | None:
-    """从 Bearer 头或 query token 解析用户（SSE EventSource 无法带 Header，支持 ?token=）。"""
-    request = None  # placeholder to keep signature readable
-    auth = ""
-    return await _resolve_user(session, auth, token)
-
-
 async def _resolve_user(session: AsyncSession, auth_header: str, token: str | None) -> User | None:
     if not settings.auth_enabled:
         return (await session.execute(select(User).where(User.username == settings.admin_username))).scalar_one_or_none()

@@ -30,7 +30,7 @@ def _gen_fernet_key() -> str:
 
 class Settings(BaseSettings):
     app_name: str = "MAIL HUB"
-    version: str = "1.0.0-mvp"
+    version: str = "1.0.1-mvp"
     debug: bool = False
 
     database_url: str = f"sqlite+aiosqlite:///{(DATA_DIR / 'mailhub.db').as_posix()}"

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import api_router
 from .core.config import settings
-from .core.db import check_db_connection, get_engine, get_sessionmaker
+from .core.db import check_db_connection, ensure_indexes, get_engine, get_sessionmaker
 from .core.ratelimit import RateLimitMiddleware
 
 logging.basicConfig(
@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
     async with get_sessionmaker()() as session:
         await session.run_sync(lambda s: Base.metadata.create_all(s.bind))
         await seed(session)
+    await ensure_indexes()
     logging.getLogger("mailhub").info("database ready (%s)", settings.database_url.split("///")[-1])
 
     scheduler = None

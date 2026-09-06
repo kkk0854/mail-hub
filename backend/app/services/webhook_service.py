@@ -9,7 +9,7 @@ import time
 from datetime import timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.db import utcnow
@@ -83,16 +83,26 @@ async def deliver(delivery: WebhookDelivery) -> tuple[bool, int | None, str | No
 
 
 async def dispatch_due(session: AsyncSession, limit: int = 10) -> int:
-    """处理到期投递；成功回调驱动任务 COMPLETED（§14 状态机）。"""
+    """原子领取到期投递（SENDING 防多进程重复投递），成功回调驱动任务 COMPLETED（§14 状态机）。
+
+    领取后进程崩溃的任务由调度器 stale-recover 兜底回收（§19）。
+    """
     now = utcnow()
-    rows = (
-        await session.execute(
-            select(WebhookDelivery)
-            .where(WebhookDelivery.state.in_(("PENDING", "RETRYING")), WebhookDelivery.next_run_at <= now)
-            .order_by(WebhookDelivery.next_run_at.asc())
-            .limit(limit)
-        )
-    ).scalars().all()
+    subq = (
+        select(WebhookDelivery.id)
+        .where(WebhookDelivery.state.in_(("PENDING", "RETRYING")), WebhookDelivery.next_run_at <= now)
+        .order_by(WebhookDelivery.next_run_at.asc())
+        .limit(limit)
+        .scalar_subquery()
+    )
+    stmt = (
+        update(WebhookDelivery)
+        .where(WebhookDelivery.id.in_(subq))
+        .values(state="SENDING", updated_at=now)
+        .returning(WebhookDelivery)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    await session.commit()
 
     for delivery in rows:
         task = await session.get(RegistrationTask, delivery.task_id) if delivery.task_id else None

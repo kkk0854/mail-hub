@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 
 async def main():
-    from ..core.db import get_sessionmaker
+    from ..core.db import ensure_indexes, get_sessionmaker
     from ..models import Base
     from ..services.seed import seed
     from .scheduler import Scheduler
@@ -17,6 +17,7 @@ async def main():
     async with engine_ok() as session:
         await session.run_sync(lambda s: Base.metadata.create_all(s.bind))
         await seed(session)
+    await ensure_indexes()
 
     sched = Scheduler()
     sched.start()

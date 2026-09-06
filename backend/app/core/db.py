@@ -60,3 +60,18 @@ async def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+# 轻量迁移：为已存在的运行库补建复合索引（create_all 只建新表，不会修改已有表）。
+INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS ix_fetch_tasks_claim ON fetch_tasks (state, next_run_at)",
+    "CREATE INDEX IF NOT EXISTS ix_fetch_tasks_mailbox_type_state ON fetch_tasks (mailbox_id, task_type, state)",
+    "CREATE INDEX IF NOT EXISTS ix_webhook_deliveries_claim ON webhook_deliveries (state, next_run_at)",
+)
+
+
+async def ensure_indexes() -> None:
+    engine = get_engine()
+    async with engine.begin() as conn:
+        for ddl in INDEX_DDL:
+            await conn.execute(text(ddl))

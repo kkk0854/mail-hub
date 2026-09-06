@@ -1,10 +1,27 @@
 # MAIL HUB
 
-**多邮箱接入、注册任务编排与自动取件回填平台** —— 邮箱自动化基础设施（MVP v1.0）
+**多邮箱接入、注册任务编排与自动取件回填平台** —— 邮箱自动化基础设施（MVP v1.0.1）
 
 外部业务系统不需要关心邮箱到底是 Outlook 还是 Cloudflare 域名邮箱：只需向 MAIL HUB 请求一个可用邮箱、创建等待任务，然后等待一个结构化结果（OTP / 激活链接 / 安全事件）即可。
 
 > 安全边界：系统用于管理**用户拥有或已获授权**的邮箱与注册流程。凭据全部加密存储，不包含绕过 CAPTCHA / 平台风控的能力。生产接入推荐 OAuth/OIDC 等官方授权机制。
+
+---
+
+## 0. v1.0.1 优化日志（2026-09-06）
+
+| # | 优化项 | 说明 |
+|---|--------|------|
+| 1 | 队列领取原子化 | `claim_due_tasks` / `dispatch_due` 改为单语句 `UPDATE...RETURNING`，杜绝并发消费者重复领取同一任务（此前实测同一邮箱同一秒被同步 2 次） |
+| 2 | 调度器防重入队 | `_schedule_sync` / `_schedule_health` 入队前检查在途任务，任务 ID 改为稳定周期桶，多调度器实例重复入队由主键天然去重；`last_sync_at`/`last_check_at` 下沉为 SQL 过滤 |
+| 3 | 僵死任务兜底回收 | 进程崩溃遗留的 `RUNNING`/`SENDING` 任务由 stale-recover 周期任务回收（5 分钟阈值），重试或失败隔离，不再永久卡死 |
+| 4 | 兜底 ID 稳定化 | 无 `provider_message_id` 的邮件改用 SHA-256 生成兜底 ID（原 `hash()` 受 PYTHONHASHSEED 影响，进程重启后同一邮件会重复入库） |
+| 5 | 登录防爆破 | 登录按 (IP, 用户名) 失败 5 次锁定 15 分钟，返回 429 |
+| 6 | 复合索引迁移 | 启动时 `CREATE INDEX IF NOT EXISTS` 补建 `fetch_tasks(state,next_run_at)`、`fetch_tasks(mailbox_id,task_type,state)`、`webhook_deliveries(state,next_run_at)` |
+| 7 | 前端分包 | Vite 8 构建拆分为 index/vendor/charts 三包，主包 765 kB → 80 kB，无单包超 500 kB，构建 19.4s → 0.9s |
+| 8 | 死代码清理 | 删除未使用的 `get_optional_user` 依赖 |
+
+配套新增 6 项回归测试（`tests/test_optimizations.py`），套件由 16 项增至 22 项。
 
 ---
 
@@ -49,7 +66,7 @@ backend\.venv\Scripts\python scripts\demo_flow.py
 ### 运行测试
 
 ```bash
-cd backend && .venv\Scripts\python -m pytest tests/ -q   # 16 passed
+cd backend && .venv\Scripts\python -m pytest tests/ -q   # 22 passed
 ```
 
 ---

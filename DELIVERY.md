@@ -1,6 +1,24 @@
 # MAIL HUB 交付总结
 
-版本：MVP v1.0 ｜ 交付日期：2026-09-06 ｜ 依据：《MAIL HUB 多邮箱接入、注册任务编排与自动取件回填平台》设计文档 v1.0
+版本：MVP v1.0.1 ｜ 交付日期：2026-09-06 ｜ 依据：《MAIL HUB 多邮箱接入、注册任务编排与自动取件回填平台》设计文档 v1.0
+
+---
+
+## 〇、v1.0.1 优化记录（2026-09-06）
+
+在 v1.0.0 基础上完成一轮系统优化，重点修复运行期实测问题与可靠性缺陷：
+
+| # | 问题（实测/审查发现） | 修复 | 验证 |
+|---|---|---|---|
+| 1 | **重复同步**：server.log 显示同一邮箱在同一秒被同步 2 次（两个 uvicorn 进程各带内嵌调度器 + 队列领取非原子，竞态重复领取） | 领取原子化（`UPDATE...RETURNING`）；调度器入队防重 + 稳定周期桶任务 ID；复合索引 | `test_claim_due_tasks_atomic_no_double_claim` 并发双领断言无重复 |
+| 2 | **幂等缺陷**：无 `provider_message_id` 的邮件用内置 `hash()` 生成兜底 ID，受 PYTHONHASHSEED 随机化影响，进程重启后同一邮件重复入库 | 改为 SHA-256 稳定兜底 ID | `test_fallback_message_id_stable_and_dedupe` |
+| 3 | **任务永久卡死**：进程崩溃后 `RUNNING`/`SENDING` 任务无回收机制，队列瘫痪 | 新增 stale-recover 周期任务（5 分钟阈值 → 重试/失败隔离） | `test_stale_running_recovery` |
+| 4 | **登录无防爆破** | (IP, 用户名) 失败 5 次锁定 15 分钟（429） | `test_login_lockout_after_failed_attempts` |
+| 5 | **调度器全表扫描** | `last_sync_at`/`last_check_at` 过滤下沉为 SQL 条件 | `test_scheduler_sync_dedup_and_sql_filter` |
+| 6 | **前端单包 765 kB** | Vite 8 `codeSplitting` 拆为 index(80kB)/vendor(270kB)/charts(415kB)，无单包超阈值 | 构建验证，8 秒级 |
+| 7 | 死代码 | 删除未使用 `get_optional_user` | 编译+全量测试 |
+
+测试套件由 16 项增至 **22 项，全部通过**（约 5 秒）。
 
 ---
 
@@ -57,7 +75,7 @@
 
 ## 五、验证结论
 
-1. **自动化测试**：`pytest` 16 项全部通过（约 5 秒），覆盖四段式导入计数与加密落库、解析规则与消息幂等、安全（登录/鉴权/脱敏/API Key/CF 入站 Token）、端到端闭环（建池→健康检查 100 分→任务分配→注入邮件→OTP 绑定→Webhook 签名验证→回调成功 COMPLETED→超时/取消路径）。
+1. **自动化测试**：`pytest` 22 项全部通过（约 5 秒），覆盖四段式导入计数与加密落库、解析规则与消息幂等、安全（登录/鉴权/脱敏/API Key/CF 入站 Token/登录防爆破）、端到端闭环（建池→健康检查 100 分→任务分配→注入邮件→OTP 绑定→Webhook 签名验证→回调成功 COMPLETED→超时/取消路径），以及 v1.0.1 新增的原子领取防重复、调度器防重、稳定兜底 ID、僵死任务回收。
 2. **真实服务闭环演示**：`scripts/demo_flow.py` 在运行中的服务上全链路通过（导入 2 邮箱→Worker 自动检测 HEALTHY→API Key 建任务→解析 OTP=483921→结果查询→Webhook 入队重试→CF 入站自动建箱）。
 3. **浏览器冒烟测试**：登录、Dashboard 图表与实时统计、邮箱管理、取件中心实时事件流（注入邮件后实时滚动"邮件进入→解析完成 OTP=998877"）、注册任务、邮件中心均正常。
 

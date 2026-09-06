@@ -1,6 +1,7 @@
 """邮件摄取管道（§10 自动取件引擎）：去重 -> 存储 -> 解析 -> 任务绑定 -> 事件。"""
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime
 
@@ -25,6 +26,18 @@ def _dedupe_key(mailbox: Mailbox, provider_message_id: str) -> str:
     return f"{mailbox.provider_type}:{provider_message_id}"
 
 
+def _fallback_message_id(sender: str, subject: str, received_at) -> str:
+    """无 provider_message_id 时的稳定兜底 ID。
+
+    使用 SHA-256 而非内置 hash()：Python hash 受 PYTHONHASHSEED 随机化影响，
+    进程重启后同一封邮件会生成不同 ID，导致跨重启重复入库（幂等失效 §21）。
+    """
+    digest = hashlib.sha256(
+        f"{sender}|{subject}|{received_at}".encode("utf-8", errors="replace")
+    ).hexdigest()[:24]
+    return f"auto-{digest}"
+
+
 def _store_raw(message_id: str, raw: bytes | None, fallback_text: str) -> str:
     try:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,7 +54,7 @@ def _store_raw(message_id: str, raw: bytes | None, fallback_text: str) -> str:
 
 async def ingest_message(session: AsyncSession, mailbox: Mailbox, msg) -> tuple[Message | None, bool]:
     """摄取一封新邮件。返回 (message, is_new)。幂等：同 provider_message_id 不重复入库（§21）。"""
-    provider_message_id = msg.provider_message_id or f"auto-{abs(hash((msg.sender, msg.subject, str(msg.received_at))))}"
+    provider_message_id = msg.provider_message_id or _fallback_message_id(msg.sender, msg.subject, msg.received_at)
     dedupe_key = _dedupe_key(mailbox, provider_message_id)
     existing = (
         await session.execute(select(Message).where(Message.dedupe_key == dedupe_key))
