@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+backend/data/raw/
+
+# Node
+node_modules/
+frontend/dist/
+
+# 运行产物
+server.log
+.env
+
+# 密钥文件（部署时保留在 data/ 下，勿入库）
+backend/data/.jwt_secret
+backend/data/.secret_key
+backend/data/.webhook_secret
+backend/data/.api_key

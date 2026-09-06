@@ -1,0 +1,45 @@
+services:
+  backend:
+    build: ./backend
+    container_name: mailhub-backend
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      MAILHUB_EMBED_WORKERS: "true"
+      MAILHUB_ADMIN_USERNAME: admin
+      MAILHUB_ADMIN_PASSWORD: admin123
+      # 生产环境请显式注入密钥（默认自动生成到 data/ 下密钥文件）
+      # MAILHUB_SECRET_KEY: ""
+      # MAILHUB_ENCRYPTION_KEY: ""
+      # MAILHUB_WEBHOOK_SECRET: ""
+      # MAILHUB_API_KEY: ""
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    container_name: mailhub-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # 生产扩展（可选）：
+  # redis:
+  #   image: redis:7-alpine
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_DB: mailhub
+  #     POSTGRES_USER: mailhub
+  #     POSTGRES_PASSWORD: change-me
+  # worker:
+  #   build: ./backend
+  #   command: ["python", "-m", "app.workers.runner"]
+  #   environment:
+  #     MAILHUB_EMBED_WORKERS: "false"
