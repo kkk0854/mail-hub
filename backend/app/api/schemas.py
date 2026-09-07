@@ -95,7 +95,22 @@ class RegistrationTaskIn(BaseModel):
     timeout_seconds: int | None = None
     callback_url: str | None = None
     idempotency_key: str | None = None
+    # 项目隔离：显式携带时，同项目 success 后邮箱回到 available 可跨项目复用；
+    # 同项目内防重复领取（已 success 的邮箱不再分配给同一 project_key）
+    project_key: str | None = None
+    caller_id: str | None = None
     metadata: dict = Field(default_factory=dict)
+
+
+class ClaimCompleteIn(BaseModel):
+    result: str = "success"  # success / failed
+    note: str = ""
+
+
+class TempMailProviderIn(BaseModel):
+    enabled: bool = True
+    priority: int = 10
+    config: dict = Field(default_factory=dict)
 
 
 class RuleIn(BaseModel):

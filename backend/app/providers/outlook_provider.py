@@ -86,8 +86,14 @@ class OutlookProvider(MailProvider):
             await self._graph_get(f"{GRAPH_BASE}/me")
             result.connectivity = True
         except ProviderError as exc:
-            result.connectivity = False
-            result.details["error"] = str(exc)
+            # 纯 Mail.Read scope 的 MSA token 访问 /me 会 401（缺 User.Read），
+            # 但 inbox 端点可用——以收件箱探测为准
+            try:
+                await self._graph_get(f"{GRAPH_BASE}/me/mailFolders/inbox/messages", params={"$top": 1, "$select": "id"})
+                result.connectivity = True
+            except ProviderError:
+                result.connectivity = False
+                result.details["error"] = str(exc)
             return result
         try:
             data = await self._graph_get(f"{GRAPH_BASE}/me/mailFolders/inbox/messages", params={"$top": 1, "$select": "id"})
@@ -103,6 +109,12 @@ class OutlookProvider(MailProvider):
     async def sync_incremental(self, cursor: dict) -> tuple[list[SyncedMessage], dict]:
         cursor = dict(cursor or {})
         since = cursor.get("received_since")
+        since_dt: datetime | None = None
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00")).replace(tzinfo=None)
+            except Exception:
+                since_dt = None
         params = {
             "$orderby": "receivedDateTime desc",
             "$top": "50",
@@ -112,7 +124,7 @@ class OutlookProvider(MailProvider):
             params["$filter"] = f"receivedDateTime ge {since}"
         data = await self._graph_get(f"{GRAPH_BASE}/me/mailFolders/inbox/messages", params=params)
         messages: list[SyncedMessage] = []
-        max_dt = since
+        max_dt = since_dt
         for item in data.get("value", []):
             received = item.get("receivedDateTime")
             try:

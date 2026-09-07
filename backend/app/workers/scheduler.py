@@ -190,6 +190,7 @@ class Scheduler:
                 select(Mailbox)
                 .where(
                     Mailbox.status.notin_(EXCLUDED_FROM_SYNC),
+                    Mailbox.is_demo == False,  # noqa: E712 演示数据不参与真实同步
                     or_(Mailbox.last_sync_at.is_(None), Mailbox.last_sync_at < threshold),
                 )
                 .limit(500)
@@ -212,6 +213,7 @@ class Scheduler:
                 select(Mailbox)
                 .where(
                     Mailbox.status.notin_(("ARCHIVED",)),
+                    Mailbox.is_demo == False,  # noqa: E712 演示数据不参与真实健康检查
                     or_(Mailbox.last_check_at.is_(None), Mailbox.last_check_at < threshold),
                 )
                 .limit(500)

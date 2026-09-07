@@ -47,6 +47,8 @@ async def create_task(
     timeout_seconds: int | None,
     callback_url: str | None,
     idempotency_key: str | None = None,
+    project_key: str | None = None,
+    caller_id: str | None = None,
     metadata: dict | None = None,
     actor_type: str = "api",
     actor_id: str = "",
@@ -68,6 +70,8 @@ async def create_task(
         match_json={**default_match(), **(match or {})},
         timeout_seconds=timeout_seconds or settings.task_default_timeout,
         callback_url=callback_url,
+        project_key=project_key,
+        caller_id=caller_id,
         metadata_json=metadata or {},
         created_at=utcnow(),
         updated_at=utcnow(),
@@ -77,7 +81,9 @@ async def create_task(
 
     # 立即尝试分配邮箱；失败则进入 WAITING_MAILBOX 由后台重试
     try:
-        mailbox = await pool_service.allocate(session, pool, actor_type=actor_type, actor_id=actor_id, ip=ip)
+        mailbox = await pool_service.allocate(
+            session, pool, project_key=project_key, actor_type=actor_type, actor_id=actor_id, ip=ip
+        )
         task.mailbox_id = mailbox.id
         task.state = "WAITING_EMAIL"
     except pool_service.PoolEmptyError:
@@ -88,11 +94,13 @@ async def create_task(
     await audit(
         session, "task.create", resource_type="registration_task", resource_id=task.id,
         actor_type=actor_type, actor_id=actor_id, ip=ip,
-        metadata={"target_ref": task.external_ref, "state": task.state, "pool_id": task.pool_id},
+        metadata={"target_ref": task.external_ref, "state": task.state, "pool_id": task.pool_id,
+                  "project_key": project_key, "caller_id": caller_id},
     )
     await bus.publish(
         "task.started",
-        {"task_id": task.id, "external_ref": task.external_ref, "state": task.state, "mailbox_id": task.mailbox_id},
+        {"task_id": task.id, "external_ref": task.external_ref, "state": task.state,
+         "mailbox_id": task.mailbox_id, "project_key": project_key},
     )
     return task, True
 
@@ -142,6 +150,10 @@ async def match_mail(session: AsyncSession, message, results: list[ParseResult])
     for task in tasks:
         if task.expires_at and task.expires_at < now:
             continue
+        # 只匹配任务创建后收到的邮件，避免绑定到邮箱里残留的旧验证码（旧码已过期会导致 wrong code）
+        msg_received = getattr(message, "received_at", None)
+        if msg_received and task.created_at and msg_received < task.created_at:
+            continue
         if not _match_ok(task.match_json, message):
             continue
         task.state = "EMAIL_RECEIVED"
@@ -166,6 +178,19 @@ async def match_mail(session: AsyncSession, message, results: list[ParseResult])
                     "result": {"type": decrypted["type"], "value": decrypted["value"]},
                 },
             )
+            # 触发通知（异步，不阻塞主流程）
+            try:
+                import asyncio
+                from . import notification_service
+                asyncio.create_task(notification_service.notify_task_completed(
+                    task_id=task.id,
+                    external_ref=task.external_ref,
+                    mailbox_email=mailbox.email if mailbox else "",
+                    result_type=decrypted["type"],
+                    result_value=decrypted["value"],
+                ))
+            except Exception:
+                pass
             if task.callback_url:
                 payload = webhook_service.build_payload(
                     "mail.result.ready", task, mailbox, {"type": decrypted["type"], "value": decrypted["value"]}

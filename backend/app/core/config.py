@@ -30,7 +30,7 @@ def _gen_fernet_key() -> str:
 
 class Settings(BaseSettings):
     app_name: str = "MAIL HUB"
-    version: str = "1.0.1-mvp"
+    version: str = "1.2.0"
     debug: bool = False
 
     database_url: str = f"sqlite+aiosqlite:///{(DATA_DIR / 'mailhub.db').as_posix()}"
@@ -55,6 +55,28 @@ class Settings(BaseSettings):
 
     static_dir: str = str(BASE_DIR.parent / "frontend" / "dist")
     cors_origins: str = "*"
+
+    # 通知通道配置（留空则不启用该通道）
+    notify_telegram_bot_token: str = ""
+    notify_telegram_chat_id: str = ""
+    notify_dingtalk_webhook: str = ""
+    notify_dingtalk_secret: str = ""
+    notify_webhook_url: str = ""
+    notify_webhook_secret: str = ""
+
+    # 一键更新（Watchtower）
+    watchtower_api_url: str = "http://watchtower:8080"
+    watchtower_api_token: str = ""
+    github_repo: str = "kkk0854/mail-hub"  # 用于检查最新版本
+
+    # LLM 验证码兜底（v1.2.0，可选，不配置默认关闭）
+    llm_fallback_enable: bool = False
+    llm_api_base: str = "https://api.openai.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+    llm_confidence_threshold: float = 0.65
+    llm_fallback_timeout: int = 20
+    llm_max_consecutive_failures: int = 5
 
     model_config = SettingsConfigDict(env_prefix="MAILHUB_", env_file=str(BASE_DIR / ".env"), extra="ignore")
 

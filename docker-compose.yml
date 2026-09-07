@@ -13,12 +13,26 @@ services:
       # MAILHUB_ENCRYPTION_KEY: ""
       # MAILHUB_WEBHOOK_SECRET: ""
       # MAILHUB_API_KEY: ""
+      # 通知通道配置（留空则不启用）
+      # MAILHUB_NOTIFY_TELEGRAM_BOT_TOKEN: ""
+      # MAILHUB_NOTIFY_TELEGRAM_CHAT_ID: ""
+      # MAILHUB_NOTIFY_DINGTALK_WEBHOOK: ""
+      # MAILHUB_NOTIFY_DINGTALK_SECRET: ""
+      # MAILHUB_NOTIFY_WEBHOOK_URL: ""
+      # 一键更新（Watchtower）
+      MAILHUB_WATCHTOWER_API_URL: "http://watchtower:8080"
+      MAILHUB_WATCHTOWER_API_TOKEN: "${WATCHTOWER_HTTP_API_TOKEN:-mailhub-watchtower-default}"
+      MAILHUB_GITHUB_REPO: "kkk0854/mail-hub"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
       interval: 30s
       timeout: 5s
       retries: 3
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    networks:
+      - mailhub-net
 
   frontend:
     build: ./frontend
@@ -28,6 +42,26 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    networks:
+      - mailhub-net
+
+  # 一键更新：Watchtower 自动监控 backend 镜像更新
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: mailhub-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:-mailhub-watchtower-default}
+      - WATCHTOWER_HTTP_API_UPDATE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_HTTP_API_PERIODIC_POLLS=false
+    command: --http-api-update --label-enable
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    networks:
+      - mailhub-net
 
   # 生产扩展（可选）：
   # redis:
@@ -43,3 +77,7 @@ services:
   #   command: ["python", "-m", "app.workers.runner"]
   #   environment:
   #     MAILHUB_EMBED_WORKERS: "false"
+
+networks:
+  mailhub-net:
+    driver: bridge

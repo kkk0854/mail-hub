@@ -60,6 +60,20 @@ class Provider(Base):
     created_at: Mapped[datetime] = _ts()
 
 
+class TempMailProviderSetting(Base):
+    """临时邮箱 Provider 插件配置（v1.2.0 插件化）。"""
+
+    __tablename__ = "temp_mail_provider_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=10)
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+
+
 # ---------------------------------------------------------------- pools
 class Pool(Base):
     __tablename__ = "pools"
@@ -98,6 +112,11 @@ class Mailbox(Base):
     failure_count: Mapped[int] = mapped_column(Integer, default=0)
     tags_json: Mapped[list] = mapped_column(JSON, default=list)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    # v1.2.0: +tag 别名识别（user+tag@domain -> 主邮箱 user@domain）
+    is_alias: Mapped[bool] = mapped_column(Boolean, default=False)
+    real_main_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # v1.2.0: 演示数据标记（seed --demo 生成，便于清理）
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = _ts()
 
@@ -113,6 +132,7 @@ class MailboxCredential(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="active")
     last_validated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = _ts()
 
@@ -151,6 +171,7 @@ class Message(Base):
     # PENDING / PARSED / PARSE_FAILED / NO_MATCH
     parse_status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
     raw_storage_ref: Mapped[str] = mapped_column(String(255), default="")
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = _ts()
 
 
@@ -164,6 +185,27 @@ class ParseResult(Base):
     result_type: Mapped[str] = mapped_column(String(24), index=True)  # OTP/URL/SECURITY_EVENT/ORDER_ID/ACTIVATION_LINK/CUSTOM
     result_value_encrypted: Mapped[str] = mapped_column(Text)  # 结果值加密存储
     confidence: Mapped[float] = mapped_column(Float, default=0.9)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = _ts()
+
+
+class ParseAttempt(Base):
+    """解析尝试日志：记录每次解析的规则、置信度、耗时、结果，用于可观测性大盘。"""
+    __tablename__ = "parse_attempts"
+
+    id: Mapped[str] = _pk("pa")
+    message_id: Mapped[str] = mapped_column(String(40), index=True)
+    mailbox_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
+    rule_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    rule_name: Mapped[str] = mapped_column(String(64), default="")
+    provider_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # HIT / NO_MATCH / REGEX_ERROR / EMPTY_VALUE
+    outcome: Mapped[str] = mapped_column(String(16), default="NO_MATCH", index=True)
+    output_type: Mapped[str] = mapped_column(String(24), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = _ts()
 
 
@@ -202,6 +244,12 @@ class RegistrationTask(Base):
     result_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     callback_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     callback_state: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # 项目隔离：显式携带 project_key + caller_id 时，同项目 success 后邮箱回到 available 可跨项目复用；
+    # 同项目内防重复领取（已 success 的邮箱不再分配给同一 project_key）
+    project_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    caller_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    claim_result: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # success/failed/none
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = _ts()

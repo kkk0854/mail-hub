@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      color: #1a1a1a;
+      background: #fafafa;
+    }
+    .header {
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 { font-size: 15px; font-weight: 600; }
+    .header .status { font-size: 11px; opacity: 0.9; }
+    .body { padding: 12px 16px; }
+    .section { margin-bottom: 12px; }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      letter-spacing: 0.5px;
+    }
+    .input-group { margin-bottom: 8px; }
+    .input-group label {
+      display: block;
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 3px;
+    }
+    .input-group input, .input-group select {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none;
+    }
+    .input-group input:focus, .input-group select:focus {
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102,126,234,0.1);
+    }
+    .btn {
+      width: 100%;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    .btn-secondary:hover { background: #e5e5e5; }
+    .btn-success { background: #52c41a; color: white; }
+    .btn-success:hover { background: #49b017; }
+    .btn-danger { background: #ff4d4f; color: white; }
+    .btn-danger:hover { background: #e64547; }
+    .btn-sm { padding: 4px 8px; font-size: 11px; width: auto; }
+    .result-card {
+      background: white;
+      border: 1px solid #e8e8e8;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .result-card .email {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1a1a1a;
+      margin-bottom: 6px;
+      word-break: break-all;
+    }
+    .result-card .code {
+      font-size: 20px;
+      font-weight: 700;
+      color: #667eea;
+      letter-spacing: 2px;
+      margin: 8px 0;
+      text-align: center;
+      background: #f5f5ff;
+      padding: 8px;
+      border-radius: 6px;
+    }
+    .result-card .meta {
+      font-size: 11px;
+      color: #999;
+      margin-bottom: 8px;
+    }
+    .result-card .actions {
+      display: flex;
+      gap: 6px;
+    }
+    .result-card .actions .btn { flex: 1; }
+    .waiting {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+    }
+    .waiting .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid #f0f0f0;
+      border-top-color: #667eea;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error {
+      background: #fff2f0;
+      border: 1px solid #ffccc7;
+      color: #ff4d4f;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    .config-hint {
+      font-size: 11px;
+      color: #999;
+      text-align: center;
+      margin-top: 10px;
+    }
+    .config-hint a { color: #667eea; text-decoration: none; }
+    .history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 8px;
+      background: white;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .history-item .email { color: #333; }
+    .history-item .state { color: #999; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📬 MAIL HUB 助手</h1>
+    <span class="status" id="connStatus">未连接</span>
+  </div>
+  <div class="body">
+    <div id="configRequired" style="display:none;">
+      <div class="error">请先配置 MAIL HUB 服务器地址和 API Key</div>
+      <button class="btn btn-primary" onclick="openOptions()">打开配置</button>
+    </div>
+
+    <div id="mainApp" style="display:none;">
+      <div class="section">
+        <div class="section-title">申领邮箱</div>
+        <div class="input-group">
+          <label>项目 Key（可选，用于项目隔离）</label>
+          <input type="text" id="projectKey" placeholder="如：my-registration-project">
+        </div>
+        <div class="input-group">
+          <label>匹配发件人（可选）</label>
+          <input type="text" id="matchSender" placeholder="如：example.com 或 *">
+        </div>
+        <div class="input-group">
+          <label>匹配主题包含（可选）</label>
+          <input type="text" id="matchSubject" placeholder="如：verification">
+        </div>
+        <button class="btn btn-primary" id="claimBtn" onclick="claimMailbox()">🚀 一键申领邮箱</button>
+      </div>
+
+      <div id="resultArea"></div>
+
+      <div class="section" id="historySection" style="display:none;">
+        <div class="section-title">最近任务</div>
+        <div id="historyList"></div>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

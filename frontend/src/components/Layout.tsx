@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Activity,
+  Cog,
   Gauge,
   Globe,
   Inbox,
@@ -31,6 +32,7 @@ const NAV = [
   { to: "/tasks", label: "注册任务", icon: ListChecks },
   { to: "/pools", label: "邮箱池", icon: Layers },
   { to: "/rules", label: "解析规则", icon: Settings2 },
+  { to: "/settings", label: "系统设置", icon: Cog },
 ];
 
 export default function Layout() {

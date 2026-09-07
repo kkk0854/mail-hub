@@ -1,6 +1,6 @@
 # MAIL HUB
 
-**多邮箱接入、注册任务编排与自动取件回填平台** —— 邮箱自动化基础设施（MVP v1.0.1）
+**多邮箱接入、注册任务编排与自动取件回填平台** —— 邮箱自动化基础设施（v1.2.0）
 
 外部业务系统不需要关心邮箱到底是 Outlook 还是 Cloudflare 域名邮箱：只需向 MAIL HUB 请求一个可用邮箱、创建等待任务，然后等待一个结构化结果（OTP / 激活链接 / 安全事件）即可。
 
@@ -8,7 +8,62 @@
 
 ---
 
-## 0. v1.0.1 优化日志（2026-09-06）
+## 0. v1.2.0 更新日志（2026-09-07）
+
+| # | 新功能 | 说明 |
+|---|--------|------|
+| 1 | 🔌 临时邮箱 Provider 插件化 | 新增 `gptmail` / `moemail` / `custom_http` 三个临时邮箱源，支持动态启用/停用、优先级排序、配置管理（`/api/v1/tempmail-providers/*`），支持 entry-points 第三方插件扩展 |
+| 2 | 📬 Outlook `+tag` 别名识别 | 收件 `user+tag@domain` 自动映射归档到主邮箱 `user@domain`（含注册域名下自动创建主邮箱+登记别名）；`split_plus_alias` 统一解析 |
+| 3 | 🤖 LLM 验证码兜底 | 规则解析置信度低于阈值（默认 0.65）时调用 LLM 二次提取；固定 JSON 契约；连续失败 5 次自动熔断；环境变量 `MAILHUB_LLM_*` 控制开关 |
+| 4 | 🎛️ 前端系统设置页 | 四个 Tab：通知渠道（含测试发送）、系统更新（版本检查 + Watchtower 一键更新）、OAuth 诊断（可视化错误指引）、临时邮箱 Provider 管理 |
+| 5 | 🧪 演示种子数据 | `python scripts/seed.py --demo` 一键生成 3 演示邮箱 + 5 演示任务 + 解析日志，全部带 `is_demo` 标记不污染生产；`--clean` 清理 |
+| 6 | 📦 自动数据库迁移 | 启动时自动补齐 v1.2.0 新列（`ensure_schema_updates`），老库无缝升级；另提供 `backend/migrations/migrate_v110_to_v120.sql` 手动脚本 |
+| 7 | 🔐 Provider 配置脱敏 | 前端回显敏感字段（key/token/secret/header 等）自动打码为 `******`，掩码值回写不覆盖原配置，杜绝密钥泄漏 |
+| 8 | 🧪 Provider 连通性测试 | `POST /api/v1/tempmail-providers/{name}/test` 实际申请+释放一个临时邮箱验证配置可用，前端一键「测试连接」 |
+| 9 | 🧹 演示数据隔离 | `is_demo` 邮箱/任务永不进入真实池分配、真实同步与健康检查，大盘统计自动排除并单列演示计数 |
+| 10 | 🧩 测试扩充 | 新增 12 项 v1.2.0 回归测试，套件由 22 项增至 34 项 |
+
+### 升级说明（v1.1.0 → v1.2.0）
+
+```bash
+docker compose pull
+# 方式一：自动迁移（推荐，启动时自动补列）
+docker compose up -d
+# 方式二：手动迁移（可选）
+sqlite3 ./backend/data/mailhub.db < ./backend/migrations/migrate_v110_to_v120.sql
+docker compose up -d
+```
+
+### LLM 兜底配置（可选）
+
+```env
+MAILHUB_LLM_FALLBACK_ENABLE=true
+MAILHUB_LLM_API_BASE=https://api.openai.com/v1
+MAILHUB_LLM_API_KEY=sk-xxx
+MAILHUB_LLM_MODEL=gpt-4o-mini
+MAILHUB_LLM_CONFIDENCE_THRESHOLD=0.65
+```
+
+不配置则默认关闭，零 API 开销。
+
+---
+
+## 0.1. v1.1.0 更新日志（2026-09-07）
+
+| # | 新功能 | 说明 |
+|---|--------|------|
+| 1 | 🔑 邮箱池项目隔离 | `project_key` + `caller_id` 维度隔离，同项目已 success 的邮箱不再重复分配；success 后邮箱跳过冷却直接回到 available，可被其他项目立即复用 |
+| 2 | 📢 统一通知服务 | Telegram / 钉钉 / Webhook 三通道抽象，验证码提取成功、任务完成、健康告警自动推送；支持 `/api/v1/system/notify/test` 测试通道 |
+| 3 | 📊 解析可观测性 | 新增 `parse_attempts` 表，记录每条规则的命中/未命中/正则错误、置信度、耗时；`/api/v1/system/stats/overview` 提供系统大盘数据 |
+| 4 | 🔧 OAuth 诊断工具 | `/api/v1/system/oauth/diagnose` 验证 refresh_token 有效性，自动识别 AADSTS 错误码并给出解决方案指引 |
+| 5 | 🔄 一键热更新 | 集成 Watchtower，`/api/v1/system/update/check` 检查 GitHub 最新版本，`/api/v1/system/update/trigger` 触发容器更新；docker-compose 已内置 watchtower 服务 |
+| 6 | 🌐 浏览器扩展 MVP | Chrome/Edge MV3 扩展：一键申领邮箱 → 自动轮询验证码 → 一键复制 → 完成释放，无需切换标签页（`browser-extension/`） |
+| 7 | 🚀 CI/CD 完善 | GitHub Actions：后端多版本 Python 测试、前端 lint+build、Docker 多架构镜像构建推送（amd64/arm64） |
+| 8 | 📈 版本号升级 | v1.0.1-mvp → v1.1.0 |
+
+---
+
+## 0.1. v1.0.1 优化日志（2026-09-06）
 
 | # | 优化项 | 说明 |
 |---|--------|------|

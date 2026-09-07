@@ -13,6 +13,7 @@ import MailCenter from "./pages/MailCenter";
 import Tasks from "./pages/Tasks";
 import Pools from "./pages/Pools";
 import Rules from "./pages/Rules";
+import SystemSettings from "./pages/SystemSettings";
 
 function Protected({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="pools" element={<Pools />} />
           <Route path="rules" element={<Rules />} />
+          <Route path="settings" element={<SystemSettings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

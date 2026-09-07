@@ -16,6 +16,8 @@ from .routers_messages import router as messages
 from .routers_pools import router as pools
 from .routers_registration import router as registration
 from .routers_rules import router as rules
+from .routers_system import router as system
+from .routers_tempmail_providers import router as tempmail_providers
 
 api_router = APIRouter()
 api_router.include_router(auth)
@@ -33,4 +35,6 @@ api_router.include_router(events)
 api_router.include_router(inbound)
 api_router.include_router(audit_logs)
 api_router.include_router(router_webhooks)
+api_router.include_router(system)
+api_router.include_router(tempmail_providers)
 api_router.include_router(dev)

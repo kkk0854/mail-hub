@@ -4,11 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.db import get_db
 from ..models import Mailbox, Message, ParseResult, RegistrationTask
-from ..services import task_service
+from ..services import pool_service, task_service
 from ..services.parser_service import decrypt_result
 from ..services.audit import audit
 from .deps import client_ip, get_current_user_or_key
-from .schemas import RegistrationTaskIn
+from .schemas import ClaimCompleteIn, RegistrationTaskIn
 from .serializers import task_out
 
 router = APIRouter(prefix="/registration-tasks", tags=["registration-tasks"])
@@ -29,6 +29,8 @@ async def create_task(
         timeout_seconds=body.timeout_seconds,
         callback_url=body.callback_url,
         idempotency_key=body.idempotency_key,
+        project_key=body.project_key,
+        caller_id=body.caller_id,
         metadata=body.metadata,
         actor_id=getattr(user, "username", ""),
         ip=client_ip(request),
@@ -119,3 +121,36 @@ async def get_result(task_id: str, session: AsyncSession = Depends(get_db), _: o
             d = decrypt_result(pr)
             result = {"type": d["type"], "value": d["value"]}
     return {"task_id": task.id, "status": task.state, "result": result}
+
+
+@router.post("/{task_id}/claim-complete")
+async def claim_complete(
+    task_id: str,
+    body: ClaimCompleteIn,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    user: object = Depends(get_current_user_or_key),
+):
+    """外部调用方显式标记任务完成并释放邮箱。
+
+    - result=success 且有 project_key：邮箱直接回到 AVAILABLE（跳过冷却），可被其他项目立即复用；
+      同项目内该邮箱被标记为已 success，不再分配给同一 project_key。
+    - result=success 且无 project_key：走正常 release（冷却后回池）。
+    - result=failed：邮箱走正常 release，不标记项目 success。
+    """
+    task = await _load_task(session, task_id)
+    if task.state in ("CANCELLED", "TIMEOUT"):
+        raise HTTPException(409, f"task in terminal state {task.state}, cannot claim-complete")
+    if body.result not in ("success", "failed"):
+        raise HTTPException(400, "result must be 'success' or 'failed'")
+    await pool_service.claim_complete(
+        session, task, result=body.result, note=body.note,
+        actor_id=getattr(user, "username", ""), ip=client_ip(request),
+    )
+    # 标记任务为 COMPLETED（如果还没到终态）
+    if task.state not in ("COMPLETED",):
+        task.state = "COMPLETED"
+        task.updated_at = task.updated_at  # 保持
+    await session.commit()
+    mailbox = await session.get(Mailbox, task.mailbox_id) if task.mailbox_id else None
+    return task_out(task, mailbox.email if mailbox else None)

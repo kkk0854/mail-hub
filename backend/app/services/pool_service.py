@@ -14,6 +14,8 @@ from .audit import audit
 IN_FLIGHT_STATES = ("WAITING_MAILBOX", "WAITING_EMAIL", "EMAIL_RECEIVED", "PARSING", "RESULT_READY", "WAITING_CALLBACK")
 # 可被分配的邮箱状态
 ALLOCATABLE_STATUSES = ("READY", "AVAILABLE")
+# 任务成功终态
+SUCCESS_STATES = ("COMPLETED",)
 
 
 class PoolEmptyError(Exception):
@@ -52,31 +54,53 @@ async def count_today_tasks(session: AsyncSession, mailbox_id: str) -> int:
     ).scalar_one()
 
 
+async def list_project_success_mailbox_ids(session: AsyncSession, project_key: str, pool_id: str | None) -> set[str]:
+    """同项目已 success 的邮箱 ID 集合（防重复领取）。"""
+    if not project_key:
+        return set()
+    stmt = select(RegistrationTask.mailbox_id).where(
+        RegistrationTask.project_key == project_key,
+        RegistrationTask.claim_result == "success",
+        RegistrationTask.mailbox_id.is_not(None),
+    )
+    if pool_id:
+        stmt = stmt.where(RegistrationTask.pool_id == pool_id)
+    rows = (await session.execute(stmt)).all()
+    return {r[0] for r in rows if r[0]}
+
+
 async def allocate(
     session: AsyncSession,
     pool: Pool | None,
     *,
     provider_type: str | None = None,
+    project_key: str | None = None,
     actor_type: str = "system",
     actor_id: str = "pool",
     ip: str = "",
 ) -> Mailbox:
-    """§9 选择规则：Provider 匹配 → Healthy → 非 Cooling → 最近使用时间 → Health Score。"""
+    """§9 选择规则：Provider 匹配 → Healthy → 非 Cooling → 同项目未 success → 最近使用时间 → Health Score。"""
     stmt = (
         select(Mailbox)
         .where(
             Mailbox.pool_id == pool.id if pool else Mailbox.pool_id.is_(None),
             Mailbox.status.in_(ALLOCATABLE_STATUSES),
             Mailbox.health_status == "HEALTHY",
+            Mailbox.is_demo == False,  # noqa: E712 演示数据永不进入真实分配
         )
         .order_by(Mailbox.last_used_at.is_(None).desc(), Mailbox.last_used_at.asc(), Mailbox.health_score.desc())
-        .limit(50)
+        .limit(100)
     )
     if provider_type:
         stmt = stmt.where(Mailbox.provider_type == provider_type)
     candidates = (await session.execute(stmt)).scalars().all()
 
+    # 项目隔离：排除同项目已 success 的邮箱
+    excluded_ids = await list_project_success_mailbox_ids(session, project_key or "", pool.id if pool else None)
+
     for mailbox in candidates:
+        if mailbox.id in excluded_ids:
+            continue
         if await list_in_flight(session, mailbox.id) >= (pool.max_concurrent if pool else 1):
             continue
         if pool and await count_today_tasks(session, mailbox.id) >= pool.daily_limit:
@@ -87,7 +111,7 @@ async def allocate(
         await audit(
             session, "pool.allocate", resource_type="mailbox", resource_id=mailbox.id,
             actor_type=actor_type, actor_id=actor_id, ip=ip,
-            metadata={"pool_id": pool.id if pool else None, "email": mailbox.email},
+            metadata={"pool_id": pool.id if pool else None, "email": mailbox.email, "project_key": project_key},
         )
         return mailbox
     raise PoolEmptyError("no available mailbox in pool")
@@ -109,6 +133,43 @@ async def release(session: AsyncSession, mailbox: Mailbox | None) -> None:
     else:
         mailbox.status = "AVAILABLE"
     mailbox.updated_at = utcnow()
+
+
+async def claim_complete(
+    session: AsyncSession,
+    task: RegistrationTask,
+    result: str = "success",
+    note: str = "",
+    actor_id: str = "",
+    ip: str = "",
+) -> None:
+    """外部调用方显式标记任务完成并释放邮箱。
+
+    - result=success 且有 project_key：邮箱直接回到 AVAILABLE（跳过冷却），可被其他项目立即复用；
+      同项目内该邮箱被标记为已 success，不再分配给同一 project_key。
+    - result=success 且无 project_key：走正常 release（冷却后回池）。
+    - result=failed：邮箱走正常 release，不标记项目 success。
+    """
+    mailbox = await session.get(Mailbox, task.mailbox_id) if task.mailbox_id else None
+    task.claim_result = result
+    task.updated_at = utcnow()
+    if result == "success" and task.project_key and mailbox:
+        # 项目维度成功复用：跳过冷却，直接可用
+        if mailbox.status == "IN_USE":
+            mailbox.status = "AVAILABLE"
+            mailbox.updated_at = utcnow()
+        await audit(
+            session, "pool.claim_complete", resource_type="registration_task", resource_id=task.id,
+            actor_type="api", actor_id=actor_id, ip=ip,
+            metadata={"result": result, "mailbox_id": mailbox.id, "project_key": task.project_key, "note": note},
+        )
+    else:
+        await release(session, mailbox)
+        await audit(
+            session, "pool.claim_complete", resource_type="registration_task", resource_id=task.id,
+            actor_type="api", actor_id=actor_id, ip=ip,
+            metadata={"result": result, "mailbox_id": mailbox.id if mailbox else None, "note": note},
+        )
 
 
 async def sweep_cooldowns(session: AsyncSession) -> int:

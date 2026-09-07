@@ -4,14 +4,16 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import re
+import time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core import crypto
+from ..core.config import settings
 from ..core.db import utcnow
 from ..core.ids import new_id
-from ..models import Message, ParseResult, ParserRule
+from ..models import Message, ParseAttempt, ParseResult, ParserRule
 
 OUTPUT_TYPES = ("OTP", "URL", "SECURITY_EVENT", "ORDER_ID", "ACTIVATION_LINK", "CUSTOM")
 
@@ -78,14 +80,48 @@ async def parse_message(session: AsyncSession, message: Message, provider_type: 
 
     rules = await load_active_rules(session, provider_type)
     matched_types: list[str] = []
+
     for rule in rules:
-        if not match_sender(rule.sender_pattern, message.sender):
+        rule_start = time.perf_counter()
+        outcome = "NO_MATCH"
+        error_msg = ""
+        confidence = 0.0
+        value = ""
+        try:
+            if not match_sender(rule.sender_pattern, message.sender):
+                outcome = "NO_MATCH"
+            elif not match_subject(rule.subject_pattern, message.subject):
+                outcome = "NO_MATCH"
+            else:
+                hit, value, confidence = extract(rule, message)
+                if not hit or not value:
+                    outcome = "NO_MATCH"
+                else:
+                    outcome = "HIT"
+        except Exception as exc:
+            outcome = "REGEX_ERROR"
+            error_msg = str(exc)[:200]
+
+        duration_ms = int((time.perf_counter() - rule_start) * 1000)
+        # 记录每条规则的解析尝试（可观测性）
+        session.add(ParseAttempt(
+            id=new_id("pa"),
+            message_id=message.id,
+            mailbox_id=message.mailbox_id,
+            rule_id=rule.id,
+            rule_name=rule.name,
+            provider_type=provider_type,
+            outcome=outcome,
+            output_type=rule.output_type if outcome == "HIT" else "",
+            confidence=confidence,
+            duration_ms=duration_ms,
+            error=error_msg,
+            created_at=utcnow(),
+        ))
+
+        if outcome != "HIT":
             continue
-        if not match_subject(rule.subject_pattern, message.subject):
-            continue
-        hit, value, confidence = extract(rule, message)
-        if not hit or not value:
-            continue
+
         results.append(
             ParseResult(
                 id=new_id("pr"),
@@ -106,7 +142,129 @@ async def parse_message(session: AsyncSession, message: Message, provider_type: 
         session.add(r)
     message.parse_status = "PARSED" if results else "NO_MATCH"
     message.category = category_for(matched_types)
+
+    # v1.2.0: LLM 兜底——规则结果置信度低于阈值时，尝试 LLM 二次提取
+    if not results or max((x.confidence for x in results), default=0) < settings.llm_confidence_threshold:
+        await _maybe_llm_fallback(session, message, results, provider_type)
+
     return results
+
+
+async def _maybe_llm_fallback(
+    session: AsyncSession, message: Message, results: list[ParseResult], provider_type: str | None
+) -> None:
+    """低置信/未命中时调用 LLM 兜底提取。"""
+    from . import llm_fallback
+
+    if not llm_fallback.llm_enabled():
+        return
+
+    start = time.perf_counter()
+    outcome = await llm_fallback.llm_extract(
+        sender=message.sender,
+        subject=message.subject,
+        body=message.body_text or "",
+    )
+    duration_ms = int((time.perf_counter() - start) * 1000)
+
+    if outcome is None:
+        session.add(ParseAttempt(
+            id=new_id("pa"),
+            message_id=message.id,
+            mailbox_id=message.mailbox_id,
+            rule_id=None,
+            rule_name="llm_fallback",
+            provider_type=provider_type,
+            outcome="LLM_ERROR",
+            output_type="",
+            confidence=0.0,
+            duration_ms=duration_ms,
+            error="llm call failed",
+            created_at=utcnow(),
+        ))
+        return
+
+    if not outcome.get("matched"):
+        session.add(ParseAttempt(
+            id=new_id("pa"),
+            message_id=message.id,
+            mailbox_id=message.mailbox_id,
+            rule_id=None,
+            rule_name="llm_fallback",
+            provider_type=provider_type,
+            outcome="NO_MATCH",
+            output_type="",
+            confidence=float(outcome.get("confidence") or 0),
+            duration_ms=duration_ms,
+            error="",
+            created_at=utcnow(),
+        ))
+        return
+
+    # LLM 命中：写入 ParseResult（与已有结果去重）
+    code = outcome.get("code") or ""
+    link = outcome.get("link") or ""
+    confidence = float(outcome.get("confidence") or 0)
+
+    if code:
+        existing_values = {crypto.decrypt_str(r.result_value_encrypted) for r in results}
+        if code not in existing_values:
+            results.append(ParseResult(
+                id=new_id("pr"),
+                message_id=message.id,
+                rule_id=None,
+                rule_name="llm_fallback",
+                result_type="OTP" if _looks_like_otp(code) else "CUSTOM",
+                result_value_encrypted=crypto.encrypt_str(code),
+                confidence=confidence,
+                created_at=utcnow(),
+            ))
+    if link:
+        existing_values = {crypto.decrypt_str(r.result_value_encrypted) for r in results}
+        if link not in existing_values:
+            results.append(ParseResult(
+                id=new_id("pr"),
+                message_id=message.id,
+                rule_id=None,
+                rule_name="llm_fallback",
+                result_type="ACTIVATION_LINK",
+                result_value_encrypted=crypto.encrypt_str(link),
+                confidence=confidence,
+                created_at=utcnow(),
+            ))
+
+    for r in results:
+        session.add(r)
+    message.parse_status = "PARSED" if results else message.parse_status
+    message.category = category_for([x.result_type for x in results]) if results else message.category
+
+    session.add(ParseAttempt(
+        id=new_id("pa"),
+        message_id=message.id,
+        mailbox_id=message.mailbox_id,
+        rule_id=None,
+        rule_name="llm_fallback",
+        provider_type=provider_type,
+        outcome="HIT",
+        output_type=",".join(sorted({r.result_type for r in results if r.rule_id is None})),
+        confidence=confidence,
+        duration_ms=duration_ms,
+        error="",
+        created_at=utcnow(),
+    ))
+
+
+def _looks_like_otp(value: str) -> bool:
+    """启发式判断是否为 OTP（4-8 位数字，或含字母的短验证码）。"""
+    value = value.strip()
+    if not value:
+        return False
+    if value.isdigit() and 4 <= len(value) <= 8:
+        return True
+    # 常见验证码格式：混合字母数字 4-10 位（不含空格）
+    if re.fullmatch(r"[A-Za-z0-9]{4,10}", value):
+        return True
+    return False
 
 
 def decrypt_result(result: ParseResult) -> dict:
