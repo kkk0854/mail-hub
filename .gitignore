@@ -21,3 +21,9 @@ backend/data/.jwt_secret
 backend/data/.secret_key
 backend/data/.webhook_secret
 backend/data/.api_key
+
+# 运行日志与邮件数据（不入库）
+backend/mailhub*.log
+backend/uvicorn.log
+backend/data/incoming/
+backend/data/db_backup_*/
