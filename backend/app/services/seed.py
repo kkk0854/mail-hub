@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core import crypto, security
-from ..core.config import settings
+from ..core.config import DEFAULT_ADMIN_PASSWORD, settings
 from ..core.ids import new_id
 from ..models import ApiKey, ParserRule, Pool, User
 
@@ -41,6 +41,8 @@ async def seed(session: AsyncSession) -> None:
                 username=settings.admin_username,
                 password_hash=security.hash_password(settings.admin_password),
                 role="admin",
+                # 仍使用内置默认口令 → 首次登录强制改密
+                force_password_change=settings.admin_password == DEFAULT_ADMIN_PASSWORD,
             )
         )
         logger.info("seeded admin user %r", settings.admin_username)

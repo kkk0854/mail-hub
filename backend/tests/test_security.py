@@ -91,3 +91,38 @@ async def test_inbound_rejects_bad_token(client, auth_headers):
         headers={"X-Inbound-Token": "wrong-token"},
     )
     assert resp.status_code == 401
+
+
+async def test_force_password_change_flow(client, auth_headers):
+    """初始管理员（内置默认口令）必须强制改密后才能使用；改密后解除标记、旧口令失效。"""
+    # 用默认口令登录 → 返回强制改密标记
+    resp = await client.post(f"{API}/auth/login", json={"username": "admin", "password": "admin123"})
+    assert resp.status_code == 200
+    assert resp.json().get("force_password_change") is True
+
+    me = await client.get(f"{API}/auth/me", headers=auth_headers)
+    assert me.status_code == 200
+    assert me.json().get("force_password_change") is True
+
+    # 弱密码 / 纯字母密码被拒绝
+    weak = await client.post(f"{API}/auth/change-password", headers=auth_headers,
+                             json={"old_password": "admin123", "new_password": "short"})
+    letters = await client.post(f"{API}/auth/change-password", headers=auth_headers,
+                                json={"old_password": "admin123", "new_password": "abcdefgh"})
+    assert weak.status_code == 400
+    assert letters.status_code == 400
+
+    # 正确改密 → 返回成功且解除强制标记
+    new_pw = f"NewPass-{uuid.uuid4().hex[:6]}-9x"
+    ok = await client.post(f"{API}/auth/change-password", headers=auth_headers,
+                           json={"old_password": "admin123", "new_password": new_pw})
+    assert ok.status_code == 200, ok.text
+    me2 = await client.get(f"{API}/auth/me", headers=auth_headers)
+    assert me2.json().get("force_password_change") is False
+
+    # 新密码可登录，旧默认口令被拒
+    login_new = await client.post(f"{API}/auth/login", json={"username": "admin", "password": new_pw})
+    assert login_new.status_code == 200
+    assert login_new.json().get("force_password_change") is False
+    login_old = await client.post(f"{API}/auth/login", json={"username": "admin", "password": "admin123"})
+    assert login_old.status_code == 401

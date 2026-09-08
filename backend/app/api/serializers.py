@@ -17,6 +17,7 @@ from ..models import (
     WebhookDelivery,
 )
 from ..services.parser_service import decrypt_result
+from ..services import import_service
 
 
 def _dt(v):
@@ -197,13 +198,14 @@ def batch_out(b: ImportBatch) -> dict:
     }
 
 
-def import_row_out(r: ImportRow) -> dict:
+def import_row_out(r: ImportRow, mapping: list[str] | None = None) -> dict:
+    mapping = mapping or []
     return {
         "id": r.id,
         "line_no": r.line_no,
-        "raw_line": r.raw_line,
-        "segments": r.segments_json or [],
-        "parsed": r.parsed_json or {},
+        "raw_line": import_service.decrypt_raw_line(r.raw_line or ""),
+        "segments": import_service.decrypt_segments(r.segments_json or [], mapping),
+        "parsed": import_service.decrypt_parsed(r.parsed_json or {}),
         "status": r.status,
         "error": r.error_message,
     }

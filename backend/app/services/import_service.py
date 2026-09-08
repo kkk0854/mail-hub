@@ -10,6 +10,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core import crypto
 from ..core.db import utcnow
 from ..core.ids import new_id
 from ..models import FetchTask, ImportBatch, ImportRow, Mailbox, MailboxCredential
@@ -37,6 +38,66 @@ FIELD_TO_CREDENTIAL = {
 }
 
 MANDATORY_FIELDS = ("email",)
+
+# ---------------------------------------------------------------- 凭据字段加解密（§20）
+# 凡映射到凭据的字段值（password/refresh_token/client_secret/imap_* 等）一律加密落库，
+# 读库/导出时再解密，保证数据库不落任何明文凭据。非加密前缀的历史明文数据解密函数直接兼容。
+ENC_PREFIX = "enc://"
+SENSITIVE_TARGETS = frozenset(FIELD_TO_CREDENTIAL.keys())
+
+
+def _enc_value(value) -> str:
+    """加密单值；空值不加密。"""
+    s = str(value or "")
+    return ENC_PREFIX + crypto.encrypt_str(s) if s else s
+
+
+def _dec_value(value) -> str:
+    """解密单值；非加密前缀（历史明文）原样返回。"""
+    s = str(value or "")
+    return crypto.decrypt_str(s[len(ENC_PREFIX):]) if s.startswith(ENC_PREFIX) else s
+
+
+def encrypt_parsed(parsed: dict) -> dict:
+    """写库前：对 parsed 中敏感字段加密。"""
+    return {k: _enc_value(v) if k in SENSITIVE_TARGETS and v else v for k, v in (parsed or {}).items()}
+
+
+def decrypt_parsed(parsed: dict | None) -> dict:
+    """读库/预览前：解密 parsed 中敏感字段。"""
+    return {k: _dec_value(v) if k in SENSITIVE_TARGETS else v for k, v in (parsed or {}).items()}
+
+
+def encrypt_segments(segments: list, mapping: list[str]) -> list:
+    """写库前：按 field_mapping 对齐加密敏感列（PASTE/CSV 场景）。"""
+    mapping = list(mapping or [])
+    out = []
+    for idx, seg in enumerate(segments or []):
+        target = mapping[idx] if idx < len(mapping) else None
+        out.append(_enc_value(seg) if target in SENSITIVE_TARGETS and seg else seg)
+    return out
+
+
+def decrypt_segments(segments: list, mapping: list[str]) -> list:
+    """读库前：按 field_mapping 对齐解密敏感列。"""
+    mapping = list(mapping or [])
+    out = []
+    for idx, seg in enumerate(segments or []):
+        target = mapping[idx] if idx < len(mapping) else None
+        out.append(_dec_value(seg) if target in SENSITIVE_TARGETS else seg)
+    return out
+
+
+def encrypt_raw_line(raw: str) -> str:
+    """写库前：原始文本行整体加密，确保无法从 DB 直接还原含凭据的原始行。"""
+    s = str(raw or "")
+    return _enc_value(s) if s else s
+
+
+def decrypt_raw_line(raw: str) -> str:
+    """读库/导出前：解密原始文本行。"""
+    s = str(raw or "")
+    return _dec_value(s)
 
 
 def _normalize_mapping(mapping: list[str] | None, expected_len: int | None = None) -> list[str]:
@@ -164,18 +225,24 @@ async def create_batch(
 
     seen_emails: set[str] = set()
     counts = {"VALID": 0, "DUPLICATE": 0, "ERROR": 0, "MISSING": 0}
+    # 批量预取已存在邮箱，避免逐行 N+1 查询
+    all_emails = {(r["parsed"].get("email") or "").strip().lower() for r in rows if r["parsed"].get("email")}
+    existing_emails: set[str] = set()
+    if all_emails:
+        existing_emails = {
+            e
+            for (e,) in (
+                await session.execute(select(Mailbox.email).where(Mailbox.email.in_(all_emails)))
+            ).all()
+        }
     for row in rows:
         status, error = _validate_row(row["parsed"], delimiter, len(row["segments"]), mapping)
         email = (row["parsed"].get("email") or "").strip().lower()
         if status == "VALID":
             if email in seen_emails:
                 status, error = "DUPLICATE", "duplicate email within batch"
-            else:
-                existing = (
-                    await session.execute(select(Mailbox.id).where(Mailbox.email == email))
-                ).scalar_one_or_none()
-                if existing:
-                    status, error = "DUPLICATE", "mailbox already exists"
+            elif email in existing_emails:
+                status, error = "DUPLICATE", "mailbox already exists"
             seen_emails.add(email)
         counts[status] += 1
         session.add(
@@ -183,9 +250,9 @@ async def create_batch(
                 id=new_id("imr"),
                 batch_id=batch.id,
                 line_no=row["line_no"],
-                raw_line=row["raw_line"][:2000],
-                segments_json=row["segments"],
-                parsed_json=row["parsed"],
+                raw_line=encrypt_raw_line(row["raw_line"][:2000]),
+                segments_json=encrypt_segments(row["segments"], mapping),
+                parsed_json=encrypt_parsed(row["parsed"]),
                 status=status,
                 error_message=error,
             )
@@ -216,7 +283,7 @@ async def commit_batch(
     for row in rows:
         if row.status != "VALID":
             continue
-        parsed = row.parsed_json or {}
+        parsed = decrypt_parsed(row.parsed_json or {})
         email = (parsed.get("email") or "").strip().lower()
         if await mailbox_service.find_by_email(session, email):
             row.status = "DUPLICATE"
@@ -262,5 +329,5 @@ def errors_csv(batch: ImportBatch, rows: list[ImportRow]) -> str:
     writer.writerow(["line_no", "status", "error", "raw_line"])
     for r in rows:
         if r.status in ("DUPLICATE", "ERROR", "MISSING"):
-            writer.writerow([r.line_no, r.status, r.error_message, r.raw_line])
+            writer.writerow([r.line_no, r.status, r.error_message, decrypt_raw_line(r.raw_line or "")])
     return buf.getvalue()

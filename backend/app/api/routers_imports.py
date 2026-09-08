@@ -36,7 +36,7 @@ async def preview(body: ImportIn, request: Request, session: AsyncSession = Depe
     rows = (
         await session.execute(select(ImportRow).where(ImportRow.batch_id == batch.id).order_by(ImportRow.line_no).limit(500))
     ).scalars().all()
-    return {**batch_out(batch), "rows": [import_row_out(r) for r in rows]}
+    return {**batch_out(batch), "rows": [import_row_out(r, batch.field_mapping_json or []) for r in rows]}
 
 
 @router.post("/validate")
@@ -52,16 +52,18 @@ async def validate(body: ImportIn, session: AsyncSession = Depends(get_db), _: o
     seen: set[str] = set()
     counts = {"VALID": 0, "DUPLICATE": 0, "ERROR": 0, "MISSING": 0}
     errors = []
+    emails = {(r["parsed"].get("email") or "").strip().lower() for r in rows if r["parsed"].get("email")}
+    existing: set[str] = set()
+    if emails:
+        existing = {e for (e,) in (await session.execute(select(Mailbox.email).where(Mailbox.email.in_(emails)))).all()}
     for row in rows:
         status, error = _validate_row(row["parsed"], body.delimiter or ":", len(row["segments"]), mapping)
         email = (row["parsed"].get("email") or "").strip().lower()
         if status == "VALID":
             if email in seen:
                 status, error = "DUPLICATE", "duplicate email within batch"
-            else:
-                existing = (await session.execute(select(Mailbox.id).where(Mailbox.email == email))).scalar_one_or_none()
-                if existing:
-                    status, error = "DUPLICATE", "mailbox already exists"
+            elif email in existing:
+                status, error = "DUPLICATE", "mailbox already exists"
             seen.add(email)
         counts[status] += 1
         if status != "VALID" and len(errors) < 50:
@@ -92,7 +94,7 @@ async def get_batch(batch_id: str, page: int = 1, page_size: int = 100, session:
             select(ImportRow).where(ImportRow.batch_id == batch_id).order_by(ImportRow.line_no).offset((page - 1) * page_size).limit(page_size)
         )
     ).scalars().all()
-    return {**batch_out(batch), "rows": [import_row_out(r) for r in rows]}
+    return {**batch_out(batch), "rows": [import_row_out(r, batch.field_mapping_json or []) for r in rows]}
 
 
 @router.get("/{batch_id}/errors.csv", response_class=PlainTextResponse)

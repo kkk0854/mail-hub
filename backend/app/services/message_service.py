@@ -52,6 +52,29 @@ def _store_raw(message_id: str, raw: bytes | None, fallback_text: str) -> str:
         return ""
 
 
+def cleanup_raw_files(older_than_days: int = 7) -> int:
+    """清理超过 N 天的原始邮件文件，防止 raw/ 无限占盘（§20）。返回删除数量。"""
+    import time
+
+    try:
+        cutoff = time.time() - older_than_days * 86400
+        removed = 0
+        if RAW_DIR.exists():
+            for f in RAW_DIR.iterdir():
+                try:
+                    if f.is_file() and f.suffix.lower() == ".eml" and f.stat().st_mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        removed += 1
+                except OSError:
+                    continue
+        if removed:
+            logger.info("raw cleanup removed %d old file(s) from %s", removed, RAW_DIR)
+        return removed
+    except OSError:
+        logger.exception("raw cleanup failed")
+        return 0
+
+
 async def ingest_message(session: AsyncSession, mailbox: Mailbox, msg) -> tuple[Message | None, bool]:
     """摄取一封新邮件。返回 (message, is_new)。幂等：同 provider_message_id 不重复入库（§21）。"""
     provider_message_id = msg.provider_message_id or _fallback_message_id(msg.sender, msg.subject, msg.received_at)

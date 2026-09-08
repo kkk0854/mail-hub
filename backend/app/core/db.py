@@ -93,6 +93,7 @@ SCHEMA_UPGRADES: dict[str, list[tuple[str, str]]] = {
     "parse_attempts": [("is_demo", "BOOLEAN DEFAULT 0")],
     "parse_results": [("is_demo", "BOOLEAN DEFAULT 0")],
     "mailbox_credentials": [("is_demo", "BOOLEAN DEFAULT 0")],
+    "users": [("force_password_change", "BOOLEAN DEFAULT 0")],
 }
 
 

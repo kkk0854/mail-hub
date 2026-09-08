@@ -28,6 +28,9 @@ def _gen_fernet_key() -> str:
     return Fernet.generate_key().decode()
 
 
+DEFAULT_ADMIN_PASSWORD = "admin123"  # 内置默认口令；生产必须用环境变量覆盖，首登强制改密。
+
+
 class Settings(BaseSettings):
     app_name: str = "MAIL HUB"
     version: str = "1.2.0"
@@ -43,7 +46,7 @@ class Settings(BaseSettings):
 
     auth_enabled: bool = True
     admin_username: str = "admin"
-    admin_password: str = "admin123"
+    admin_password: str = DEFAULT_ADMIN_PASSWORD
 
     embed_workers: bool = True  # API 进程内嵌 Worker；分离部署时设为 false
     worker_concurrency: int = 2
@@ -54,7 +57,8 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 600
 
     static_dir: str = str(BASE_DIR.parent / "frontend" / "dist")
-    cors_origins: str = "*"
+    # 允许的跨域来源（逗号分隔）。留空 = 不开放跨域（安全默认），仅放行本机开发源（见 main.py）
+    cors_origins: str = ""
 
     # 通知通道配置（留空则不启用该通道）
     notify_telegram_bot_token: str = ""

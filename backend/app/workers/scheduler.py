@@ -243,6 +243,10 @@ class Scheduler:
     async def _sweep_cooldowns(self, session):
         await pool_service.sweep_cooldowns(session)
 
+    async def _sweep_raw_files(self, session):
+        """周期性清理过期原始邮件文件，防 raw/ 无限占盘（§20）。"""
+        await message_service.cleanup_raw_files()
+
     async def _sweep_stale_running(self, session):
         """回收因进程崩溃/异常退出而永久卡在 RUNNING/SENDING 的任务（§19 失败隔离兜底）。"""
         from ..models import WebhookDelivery
@@ -295,6 +299,8 @@ class Scheduler:
             self._periodic("webhook", WEBHOOK_INTERVAL_SECONDS, self._dispatch_webhooks), name="webhook-dispatcher"))
         self._tasks.append(asyncio.create_task(
             self._periodic("cooldown", COOLDOWN_INTERVAL_SECONDS, self._sweep_cooldowns), name="cooldown-sweeper"))
+        self._tasks.append(asyncio.create_task(
+            self._periodic("raw-cleanup", 3600, self._sweep_raw_files), name="raw-cleanup"))
         self._tasks.append(asyncio.create_task(
             self._periodic("stale-recover", 60, self._sweep_stale_running), name="stale-recover"))
         logger.info("scheduler started (workers=%d)", self.concurrency)

@@ -75,9 +75,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan, docs_url="/docs", openapi_url="/openapi.json")
 
 app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.rate_limit_per_minute)
+def _cors_origins() -> list[str]:
+    """解析 CORS 白名单。未显式配置时不开放跨域（同源部署不受影响，安全默认 §20）。
+
+    前端开发源已内置放行；生产若前端独立部署，请通过 MAILHUB_CORS_ORIGINS 显式配置。
+    """
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    if origins:
+        return origins
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
+    allow_origins=_cors_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

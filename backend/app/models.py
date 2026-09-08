@@ -32,6 +32,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(16), default="admin")
     status: Mapped[str] = mapped_column(String(16), default="active")
+    # 初始管理员（内置默认口令）必须改密后才能正常使用（§20 强制改密）
+    force_password_change: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = _ts()
 

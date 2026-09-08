@@ -6,8 +6,9 @@ services:
       - ./backend/data:/app/data
     environment:
       MAILHUB_EMBED_WORKERS: "true"
-      MAILHUB_ADMIN_USERNAME: admin
-      MAILHUB_ADMIN_PASSWORD: admin123
+      MAILHUB_ADMIN_USERNAME: ${MAILHUB_ADMIN_USERNAME:-admin}
+      # 生产必须注入强口令；未设置则 compose 启动直接失败（§20 杜绝默认口令）
+      MAILHUB_ADMIN_PASSWORD: ${MAILHUB_ADMIN_PASSWORD:?set a strong MAILHUB_ADMIN_PASSWORD}
       # 生产环境请显式注入密钥（默认自动生成到 data/ 下密钥文件）
       # MAILHUB_SECRET_KEY: ""
       # MAILHUB_ENCRYPTION_KEY: ""
@@ -21,7 +22,7 @@ services:
       # MAILHUB_NOTIFY_WEBHOOK_URL: ""
       # 一键更新（Watchtower）
       MAILHUB_WATCHTOWER_API_URL: "http://watchtower:8080"
-      MAILHUB_WATCHTOWER_API_TOKEN: "${WATCHTOWER_HTTP_API_TOKEN:-mailhub-watchtower-default}"
+      MAILHUB_WATCHTOWER_API_TOKEN: "${WATCHTOWER_HTTP_API_TOKEN:?set a strong WATCHTOWER_HTTP_API_TOKEN}"
       MAILHUB_GITHUB_REPO: "kkk0854/mail-hub"
     restart: unless-stopped
     healthcheck:
@@ -53,7 +54,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:-mailhub-watchtower-default}
+      - WATCHTOWER_HTTP_API_TOKEN=${WATCHTOWER_HTTP_API_TOKEN:?set a strong WATCHTOWER_HTTP_API_TOKEN}
       - WATCHTOWER_HTTP_API_UPDATE=true
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_HTTP_API_PERIODIC_POLLS=false

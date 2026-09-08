@@ -122,34 +122,43 @@ class OutlookProvider(MailProvider):
         }
         if since:
             params["$filter"] = f"receivedDateTime ge {since}"
-        data = await self._graph_get(f"{GRAPH_BASE}/me/mailFolders/inbox/messages", params=params)
+        url = f"{GRAPH_BASE}/me/mailFolders/inbox/messages"
         messages: list[SyncedMessage] = []
         max_dt = since_dt
-        for item in data.get("value", []):
-            received = item.get("receivedDateTime")
-            try:
-                received_dt = datetime.fromisoformat(received.replace("Z", "+00:00")).replace(tzinfo=None)
-            except Exception:
-                received_dt = self._now()
-            from_obj = item.get("from") or {}
-            sender = (from_obj.get("emailAddress") or {}).get("address", "")
-            recipients = [(r.get("emailAddress") or {}).get("address", "") for r in item.get("toRecipients", [])]
-            body_obj = item.get("body") or {}
-            messages.append(
-                SyncedMessage(
-                    provider_message_id=item.get("internetMessageId") or item.get("id", ""),
-                    sender=sender,
-                    recipient=",".join(r for r in recipients if r),
-                    subject=item.get("subject") or "",
-                    text_body=body_obj.get("content", "") if body_obj.get("contentType") == "text" else item.get("bodyPreview", ""),
-                    html_body=body_obj.get("content", "") if body_obj.get("contentType") == "html" else "",
-                    headers={"internetMessageId": item.get("internetMessageId") or ""},
-                    received_at=received_dt,
-                    thread_id=item.get("conversationId"),
+        page = 0
+        MAX_PAGES = 20  # 单次同步最多翻 20 页（≈1000 封），防止一次性拉爆
+        while url and page < MAX_PAGES:
+            page += 1
+            # nextLink 已包含全部查询参数，只有首请求需要显式传 params
+            data = await self._graph_get(url, params=params if page == 1 else None)
+            for item in data.get("value", []):
+                received = item.get("receivedDateTime")
+                try:
+                    received_dt = datetime.fromisoformat(received.replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    received_dt = self._now()
+                from_obj = item.get("from") or {}
+                sender = (from_obj.get("emailAddress") or {}).get("address", "")
+                recipients = [(r.get("emailAddress") or {}).get("address", "") for r in item.get("toRecipients", [])]
+                body_obj = item.get("body") or {}
+                messages.append(
+                    SyncedMessage(
+                        provider_message_id=item.get("internetMessageId") or item.get("id", ""),
+                        sender=sender,
+                        recipient=",".join(r for r in recipients if r),
+                        subject=item.get("subject") or "",
+                        text_body=body_obj.get("content", "") if body_obj.get("contentType") == "text" else item.get("bodyPreview", ""),
+                        html_body=body_obj.get("content", "") if body_obj.get("contentType") == "html" else "",
+                        headers={"internetMessageId": item.get("internetMessageId") or ""},
+                        received_at=received_dt,
+                        thread_id=item.get("conversationId"),
+                    )
                 )
-            )
-            if not max_dt or received_dt > max_dt:
-                max_dt = received_dt
+                if not max_dt or received_dt > max_dt:
+                    max_dt = received_dt
+            url = data.get("@odata.nextLink")
+        if page >= MAX_PAGES:
+            logger.warning("outlook sync reached page cap (%d), consider widening window", MAX_PAGES)
         new_cursor = dict(cursor)
         if max_dt:
             iso = max_dt.replace(tzinfo=timezone.utc).isoformat()
